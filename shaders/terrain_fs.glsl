@@ -10,9 +10,9 @@ uniform float u_scroll;
 
 const bool ROTATE = false;
 
-const int MAX_MARCHING_STEPS = 256;
+const int MAX_MARCHING_STEPS = 512;
 const float MIN_DIST = 0.0;
-const float MAX_DIST = 96.0;
+const float MAX_DIST = 1800.0;
 const float EPSILON  = 0.001;
 vec3 CAMERA_POS = vec3(0, 2, -3);
 const float FOV = 1.0;
@@ -21,6 +21,8 @@ vec3 LIGHT_POS  = vec3(0, 5, 2);
 const float PI  = acos(-1.0);
 const float TAU = (2*PI);
 const float PHI = (sqrt(5)*0.5 + 0.5);
+
+const int NUM_OCTAVES = 6;
 
 // ------------------------------------------------------------------------------------------------
 
@@ -61,8 +63,30 @@ float dist_torus(vec3 p) {
     return dist * 0.7;
 }
 
+float noise(vec2 p) {
+    return sin(p[0]) + sin(p[1]);
+}
+
+float fbm(vec2 p) {
+    float res = 0.0;
+    float amp = 0.5;
+    float freq = 1.95;
+    for( int i = 0; i < NUM_OCTAVES; i++) {
+        res += amp * noise(p);
+        amp *= 0.5;
+        p = p * freq * rot2D(PI / 4.0) - res * 0.4;
+    }
+    return res;
+}
+
+
 float dist_plane(vec3 p, float h) {
-    return p.y -h;
+    float d = 0;
+    d += 80.0 * noise(p.xz * 0.01);
+    //d += 80.0 * noise(p.xz * 0.01) + 80.0;
+    d += 20.0 * fbm(p.xz * 0.1) * noise(p.xz * 0.01) + 20.0;
+    d += p.y + h;
+    return d;
 }
 
 float dist_sphere(vec3 p, vec3 pos) {
@@ -80,9 +104,11 @@ float sceneSDF(vec3 p)
 {
     float dt = dist_torus(p);
 
-    float dp = dist_plane(p, -1.0);
+    float dp = dist_plane(p, 2.0);
 	float ds = dist_sphere(p, vec3(-3.0, 0.0, 0.0));
     float dc = dist_cube(p, vec3(1, 1, 1));
+
+    return dp;
     return unionSDF(ds, unionSDF(dp, dc));
 }
 
@@ -124,13 +150,62 @@ float shortest_distance_to_surface(vec3 eye, vec3 marching_direction, float star
 
 // ------------------------------------------------------------------------------------------------
 
+float getAmbientOcclusion(vec3 p, vec3 normal) {
+    float occ = 0.0;
+    float weight = 0.4;
+    for (int i = 0; i < 8; i++) {
+        float len = 0.01 + 0.02 * float(i * i);
+        float dist = sceneSDF(p + normal * len);
+        occ += (len - dist) * weight;
+        weight *= 0.85;
+    }
+    return 1.0 - clamp(0.6 * occ, 0.0, 1.0);
+}
+
+
+float getSoftShadow(vec3 p, vec3 lightPos) {
+    float res = 1.0;
+    float dist = 0.01;
+    float lightSize = 0.03;
+    for (int i = 0; i < 8; i++) {
+        float hit = sceneSDF(p + lightPos * dist);
+        res = min(res, hit / (dist * lightSize));
+        if (hit < EPSILON) break;
+        dist += hit;
+        if (dist > 30.0) break;
+    }
+    return clamp(res, 0.0, 1.0);
+}
+
+vec3 lightPos = vec3(250.0, 100.0, -300.0) * 4.0;
+
+vec3 get_light2(vec3 p, vec3 rd, vec3 color) {
+    //vec3 color =vec3(1);
+
+    vec3 l = normalize(lightPos - p);
+    vec3 normal = get_normal(p);
+    vec3 v = -rd;
+    vec3 r = reflect(-l, normal);
+
+    float diff = 0.85 * max(dot(l, normal), 0.0);
+    float specular = 0.4 * pow(clamp(dot(r, v), 0.0, 1.0), 10.0);
+    float ambient = 0.2;
+
+    //return  (specular + diff) * color;
+
+    float shadow = getSoftShadow(p, lightPos);
+    float occ = getAmbientOcclusion(p, normal);
+    return  (ambient * occ + (specular * occ + diff) * shadow) * color;
+}
+
+
 vec3 get_light(vec3 p, vec3 rd, vec3 color) {
 
-    vec3 light2Pos = vec3(1.0 * sin(0.37 * u_time),
-                          1.0 * cos(0.37 * u_time),
-                          1.0);// * LIGHT_POS;
+    vec3 light2Pos = vec3(200.0 * sin(0.37 * u_time),
+                          100.0 * cos(0.37 * u_time),
+                          300.0);// * LIGHT_POS;
 
-    light2Pos = LIGHT_POS;
+    light2Pos = lightPos;
 
     vec3 L = normalize(light2Pos - p);
     vec3 N = get_normal(p);
@@ -179,8 +254,6 @@ mat3 getCam(vec3 eye, vec3 target) {
 }
 
 // ------------------------------------------------------------------------------------------------
-// https://www.shadertoy.com/view/Xtd3z7
-// https://github.com/StanislavPetrovV/Procedural-3D-scene-Ray-Marching/blob/main/programs/fragment.glsl
 
 void main() {
     vec2 uv = (gl_FragCoord.xy * 2. - u_resolution.xy) / u_resolution.y; // (0,0) at the center of the screen X and Y in [-1, 1]
@@ -188,7 +261,8 @@ void main() {
     //vec2 uv0 = uv;                                // svg distance to the scene (original distance to the center of the canvas)
     //uv = fract(uv*2) - 0.5;                       // repeat the screne
 
-    vec3 eye    = CAMERA_POS;                   // ray origin vec3(0, 0, -3);
+    vec3 eye = vec3(220.0, 50.0 * sin(u_time*0.5) + 50.0, 220.0);
+    //vec3 eye    = CAMERA_POS;                   // ray origin vec3(0, 0, -3);
 
     mouseControl(eye);
 
@@ -200,6 +274,7 @@ void main() {
     
     vec3 screen_pos = eye + (fwd + side * uv.x + up * uv.y);
     vec3 rd = normalize(screen_pos - eye); // <=> vec3 rd = getCam(eye, target) * normalize(vec3(uv, FOV));
+
     //vec3 rd = normalize(vec3(uv, 1));
 
     float dist = shortest_distance_to_surface(eye, rd, MIN_DIST, MAX_DIST);
@@ -217,6 +292,9 @@ void main() {
         if(ROTATE) rotate(pos_along_ray);
 
         col += get_light(pos_along_ray, rd, material);
+
+        //col = mix(material, col, exp(-0.0000007 * dist * dist));
+
         //col = mix(col, background, 1.0 - exp(-0.00002 * dist * dist));
 
         // rotate(pos_along_ray);

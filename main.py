@@ -47,7 +47,7 @@ class App:
 
         # load shaders
         all_shaders = ShaderProgram(self.ctx)
-        self.program = all_shaders.programs['ray']
+        self.program = all_shaders.programs[MODEL]
 
         vertex_data = [(-1, -1, 0), (1, -1, 0), (1, 1, 0), (-1, 1, 0), (-1, -1, 0), (1, 1, 0)]
         vertex_data = np.array(vertex_data, dtype=np.float32)

@@ -5,6 +5,7 @@ class ShaderProgram:
         self.programs = {}
         self.programs['default'] = self.get_program('default')
         self.programs['ray'] = self.get_program('ray')
+        self.programs['terrain'] = self.get_program('terrain')
 
     def get_program(self, shader_name):
         with open(f'shaders/{shader_name}_vs.glsl') as file:
